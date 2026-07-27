@@ -8,6 +8,9 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False,
     )
     provider: Literal["gemini", "azure", "ollama"] = "gemini"
+    # Embeddings default to LOCAL — keeps Gemini quota for chat, no rate limits.
+    embedding_provider: Literal["gemini", "azure", "ollama", "local"] = "local"
+
     gemini_api_key: str = ""
     azure_openai_key: str = ""
     azure_openai_endpoint: str = ""
