@@ -1,0 +1,55 @@
+[project]
+name = "agentic-rag-platform"
+version = "0.1.0"
+description = "Extensible multi-agent RAG platform with hybrid retrieval, MCP tools, and CI-gated evaluation."
+requires-python = ">=3.11"
+readme = "README.md"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sse-starlette>=2.1",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "openai>=1.55",
+    "langgraph>=0.2",
+    "langsmith>=0.1",
+    "langchain>=0.3",
+    "langchain-openai>=0.2",
+    "qdrant-client>=1.12",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=3.3",
+    "mcp>=1.0",
+    "tenacity>=9.0",
+    "diskcache>=5.6",
+    "opentelemetry-api>=1.28",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp>=1.28",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "ragas>=0.2",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.8","mypy>=1.13","pytest>=8.3","pytest-asyncio>=0.24","bandit>=1.7","safety>=3.2","ipython>=8.29"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "eval*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
