@@ -1,14 +1,19 @@
 """RAG agent built on LangGraph.
 
-Graph: START -> rewrite_query -> retrieve -> synthesize -> END
+Graph: START -> rewrite -> retrieve -> maybe_call_tools -> synthesize -> END
 
-- Multi-query retrieval: runs hybrid retrieval on both original + rewritten
-  queries, merges candidates, reranks against the ORIGINAL query.
-- LLM calls wrapped with exponential-backoff retry (handles Gemini 503 / 429).
+- Multi-query retrieval: hybrid on both original + rewritten, merged, reranked
+  against ORIGINAL query.
+- Tool calling: OpenAI function-calling over registered MCP tools. Only fires
+  when the LLM decides live data adds value (specific CVE IDs, KEV lookups).
+- Tool results become numbered passages [N+1], [N+2]... alongside doc passages,
+  so citations stay consistent.
+- All LLM calls wrapped with exponential-backoff retry.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any, TypedDict
@@ -27,8 +32,10 @@ from src.agents.prompts import (
     QUERY_REWRITE_PROMPT,
     SYNTHESIS_SYSTEM_PROMPT,
     SYNTHESIS_USER_TEMPLATE,
+    TOOL_DECIDER_SYSTEM_PROMPT,
 )
 from src.llm.factory import get_chat_client, get_model_name
+from src.mcp_server.registry import get_tool_schemas, invoke_tool
 from src.retrieval.hybrid import RetrievalConfig, retrieve as retrieve_docs
 from src.retrieval.rerank import rerank as rerank_fn
 
@@ -37,6 +44,7 @@ class AgentState(TypedDict, total=False):
     query: str
     rewritten_query: str
     retrieved: list[tuple[str, float, dict[str, Any]]]
+    tool_results: list[dict[str, Any]]
     answer: str
     citations: list[Citation]
 
@@ -51,37 +59,61 @@ _RETRY_EXCEPTIONS = (RateLimitError, InternalServerError, APIError)
     retry=retry_if_exception_type(_RETRY_EXCEPTIONS),
 )
 def _chat_with_retry(**kwargs: Any) -> Any:
-    """Wrap the OpenAI SDK chat call with exponential-backoff retry."""
-    client = get_chat_client()
-    return client.chat.completions.create(**kwargs)
+    return get_chat_client().chat.completions.create(**kwargs)
 
 
-def _format_context(retrieved: list[tuple[str, float, dict[str, Any]]]) -> str:
+def _format_context(
+    retrieved: list[tuple[str, float, dict[str, Any]]],
+    tool_results: list[dict[str, Any]],
+) -> str:
+    """Numbered passages: docs first, then tool results (indices continue)."""
     lines = []
-    for i, (_pid, _score, payload) in enumerate(retrieved, 1):
+    idx = 1
+    for _pid, _score, payload in retrieved:
         src = payload.get("source_id", "?")
-        section = payload.get("section", "") or "-"
+        section = payload.get("section") or "-"
         text = (payload.get("text") or "").strip()
-        lines.append(f"[{i}] Source: {src} | Section: {section}\n{text}\n")
+        lines.append(f"[{idx}] Source: {src} | Section: {section}\n{text}\n")
+        idx += 1
+    for tr in tool_results:
+        name = tr.get("name", "?")
+        args = json.dumps(tr.get("args", {}), separators=(",", ":"))
+        result_json = json.dumps(tr.get("result", {}), indent=2, default=str)
+        if len(result_json) > 2000:
+            result_json = result_json[:2000] + "\n...(truncated)"
+        lines.append(f"[{idx}] Tool: {name} | Args: {args}\n{result_json}\n")
+        idx += 1
     return "\n".join(lines)
 
 
 def _extract_citations(
     retrieved: list[tuple[str, float, dict[str, Any]]],
+    tool_results: list[dict[str, Any]],
 ) -> list[Citation]:
-    return [
-        Citation(
-            source_id=p.get("source_id", "?"),
-            chunk_id=p.get("chunk_id", ""),
-            section=p.get("section") or "",
-            text=(p.get("text") or "")[:400],
+    cites: list[Citation] = []
+    for _pid, _score, p in retrieved:
+        cites.append(
+            Citation(
+                source_id=p.get("source_id", "?"),
+                chunk_id=p.get("chunk_id", ""),
+                section=p.get("section") or "",
+                text=(p.get("text") or "")[:400],
+            )
         )
-        for _pid, _score, p in retrieved
-    ]
+    for tr in tool_results:
+        cites.append(
+            Citation(
+                source_id=f"tool:{tr.get('name', '?')}",
+                chunk_id="",
+                section=json.dumps(tr.get("args", {}), separators=(",", ":")),
+                text=json.dumps(tr.get("result", {}), default=str)[:400],
+            )
+        )
+    return cites
 
 
 class RAGAgent(Agent):
-    """Hybrid-retrieval RAG agent with grounded citations."""
+    """Hybrid-retrieval RAG agent with MCP tool calling and grounded citations."""
 
     name = "rag"
 
@@ -93,10 +125,12 @@ class RAGAgent(Agent):
         g = StateGraph(AgentState)
         g.add_node("rewrite", self._rewrite_query)
         g.add_node("retrieve", self._retrieve)
+        g.add_node("call_tools", self._maybe_call_tools)
         g.add_node("synthesize", self._synthesize)
         g.add_edge(START, "rewrite")
         g.add_edge("rewrite", "retrieve")
-        g.add_edge("retrieve", "synthesize")
+        g.add_edge("retrieve", "call_tools")
+        g.add_edge("call_tools", "synthesize")
         g.add_edge("synthesize", END)
         return g.compile()
 
@@ -113,9 +147,7 @@ class RAGAgent(Agent):
             rewritten = (resp.choices[0].message.content or state["query"]).strip()
             rewritten = rewritten.strip("\"'` ").rstrip(":")
         except _RETRY_EXCEPTIONS:
-            # If even retries can't get a rewrite, fall back to the original query.
             rewritten = state["query"]
-        # Safety net: overly-short rewrites lose too much intent.
         if len(rewritten.split()) < 3:
             rewritten = state["query"]
         return {"rewritten_query": rewritten or state["query"]}
@@ -129,7 +161,6 @@ class RAGAgent(Agent):
             use_rerank=False,
             rerank_top_k=self.retrieval_config.fusion_k,
         )
-
         candidates: dict[str, tuple[str, float, dict[str, Any]]] = {}
         queries = [original] + ([rewritten] if rewritten and rewritten != original else [])
         for q in queries:
@@ -137,7 +168,6 @@ class RAGAgent(Agent):
                 pid = hit[0]
                 if pid not in candidates or hit[1] > candidates[pid][1]:
                     candidates[pid] = hit
-
         pool = list(candidates.values())
 
         if self.retrieval_config.use_rerank:
@@ -147,14 +177,42 @@ class RAGAgent(Agent):
 
         return {"retrieved": final}
 
+    def _maybe_call_tools(self, state: AgentState) -> dict[str, Any]:
+        """Ask the LLM whether to call any registered tools; execute if so."""
+        try:
+            resp = _chat_with_retry(
+                model=get_model_name(),
+                messages=[
+                    {"role": "system", "content": TOOL_DECIDER_SYSTEM_PROMPT},
+                    {"role": "user", "content": state["query"]},
+                ],
+                tools=get_tool_schemas(),
+                tool_choice="auto",
+                temperature=0.0,
+            )
+        except _RETRY_EXCEPTIONS:
+            return {"tool_results": []}
+
+        tool_calls = resp.choices[0].message.tool_calls or []
+        results: list[dict[str, Any]] = []
+        for call in tool_calls:
+            try:
+                args = json.loads(call.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result = invoke_tool(call.function.name, args)
+            results.append({"name": call.function.name, "args": args, "result": result})
+        return {"tool_results": results}
+
     def _synthesize(self, state: AgentState) -> dict[str, Any]:
         retrieved = state.get("retrieved") or []
-        if not retrieved:
+        tool_results = state.get("tool_results") or []
+        if not retrieved and not tool_results:
             return {
                 "answer": "I don't have enough information in the provided documents to answer that.",
                 "citations": [],
             }
-        context = _format_context(retrieved)
+        context = _format_context(retrieved, tool_results)
         prompt = SYNTHESIS_USER_TEMPLATE.format(context=context, query=state["query"])
         resp = _chat_with_retry(
             model=get_model_name(),
@@ -165,7 +223,7 @@ class RAGAgent(Agent):
             temperature=0.1,
         )
         answer = (resp.choices[0].message.content or "").strip()
-        return {"answer": answer, "citations": _extract_citations(retrieved)}
+        return {"answer": answer, "citations": _extract_citations(retrieved, tool_results)}
 
     def run(self, query: str) -> AgentResponse:
         result = self.graph.invoke({"query": query})
@@ -175,6 +233,8 @@ class RAGAgent(Agent):
             metadata={
                 "rewritten_query": result.get("rewritten_query", ""),
                 "num_retrieved": len(result.get("retrieved", [])),
+                "num_tools_called": len(result.get("tool_results", [])),
+                "tools_called": [t.get("name") for t in result.get("tool_results", [])],
             },
         )
 
