@@ -1,5 +1,8 @@
 """FastAPI app: /chat (JSON) and /chat/stream (SSE) endpoints.
 
+M5: initializes tracing at startup, auto-instruments FastAPI so every HTTP
+request is a top-level span in Jaeger.
+
 Run:
     uvicorn src.api.main:app --reload
 """
@@ -12,11 +15,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from src.agents.base import Citation
 from src.agents.rag_agent import RAGAgent
+from src.observability.tracing import init_tracing
 
 
 _agent: RAGAgent | None = None
@@ -31,11 +36,13 @@ def get_agent() -> RAGAgent:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    init_tracing()
     _ = get_agent()
     yield
 
 
 app = FastAPI(title="Agentic RAG Platform", lifespan=lifespan)
+FastAPIInstrumentor.instrument_app(app)
 
 
 class ChatRequest(BaseModel):
