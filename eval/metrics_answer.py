@@ -78,7 +78,7 @@ def _judge_call(question: str, context: str, answer: str, hint: str) -> str:
             )},
         ],
         temperature=0.0,
-        max_tokens=400,
+        max_tokens=1500,
     )
     return (resp.choices[0].message.content or "").strip()
 
