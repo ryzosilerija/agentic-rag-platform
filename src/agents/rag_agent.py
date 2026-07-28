@@ -2,10 +2,9 @@
 
 Graph: START -> rewrite_query -> retrieve -> synthesize -> END
 
-Retrieve stage uses MULTI-QUERY: runs hybrid retrieval on both the original
-and the rewritten query, merges candidates, then reranks against the ORIGINAL
-query. This makes the pipeline robust to bad query rewrites — a common
-failure mode where the rewriter over-compresses and loses key nouns.
+- Multi-query retrieval: runs hybrid retrieval on both original + rewritten
+  queries, merges candidates, reranks against the ORIGINAL query.
+- LLM calls wrapped with exponential-backoff retry (handles Gemini 503 / 429).
 """
 
 from __future__ import annotations
@@ -15,6 +14,13 @@ from dataclasses import replace
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from openai import APIError, InternalServerError, RateLimitError
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from src.agents.base import Agent, AgentResponse, Citation
 from src.agents.prompts import (
@@ -33,6 +39,21 @@ class AgentState(TypedDict, total=False):
     retrieved: list[tuple[str, float, dict[str, Any]]]
     answer: str
     citations: list[Citation]
+
+
+_RETRY_EXCEPTIONS = (RateLimitError, InternalServerError, APIError)
+
+
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type(_RETRY_EXCEPTIONS),
+)
+def _chat_with_retry(**kwargs: Any) -> Any:
+    """Wrap the OpenAI SDK chat call with exponential-backoff retry."""
+    client = get_chat_client()
+    return client.chat.completions.create(**kwargs)
 
 
 def _format_context(retrieved: list[tuple[str, float, dict[str, Any]]]) -> str:
@@ -80,28 +101,29 @@ class RAGAgent(Agent):
         return g.compile()
 
     def _rewrite_query(self, state: AgentState) -> dict[str, Any]:
-        client = get_chat_client()
-        resp = client.chat.completions.create(
-            model=get_model_name(),
-            messages=[
-                {"role": "user", "content": QUERY_REWRITE_PROMPT.format(query=state["query"])},
-            ],
-            max_tokens=100,
-            temperature=0.0,
-        )
-        rewritten = (resp.choices[0].message.content or state["query"]).strip()
-        rewritten = rewritten.strip("\"'` ").rstrip(":")
-        # Safety net: if the rewrite is suspiciously short, fall back to original.
+        try:
+            resp = _chat_with_retry(
+                model=get_model_name(),
+                messages=[
+                    {"role": "user", "content": QUERY_REWRITE_PROMPT.format(query=state["query"])},
+                ],
+                max_tokens=100,
+                temperature=0.0,
+            )
+            rewritten = (resp.choices[0].message.content or state["query"]).strip()
+            rewritten = rewritten.strip("\"'` ").rstrip(":")
+        except _RETRY_EXCEPTIONS:
+            # If even retries can't get a rewrite, fall back to the original query.
+            rewritten = state["query"]
+        # Safety net: overly-short rewrites lose too much intent.
         if len(rewritten.split()) < 3:
             rewritten = state["query"]
         return {"rewritten_query": rewritten or state["query"]}
 
     def _retrieve(self, state: AgentState) -> dict[str, Any]:
-        """Multi-query hybrid retrieval + single rerank against the original query."""
         original = state["query"]
         rewritten = state.get("rewritten_query") or original
 
-        # Build a candidate pool WITHOUT rerank (rerank is expensive; do it once at end)
         cfg_pool = replace(
             self.retrieval_config,
             use_rerank=False,
@@ -113,13 +135,11 @@ class RAGAgent(Agent):
         for q in queries:
             for hit in retrieve_docs(q, cfg_pool):
                 pid = hit[0]
-                # Keep the best-scoring version of a duplicate
                 if pid not in candidates or hit[1] > candidates[pid][1]:
                     candidates[pid] = hit
 
         pool = list(candidates.values())
 
-        # Rerank the merged pool against the ORIGINAL user query (their true intent).
         if self.retrieval_config.use_rerank:
             final = rerank_fn(original, pool, top_k=self.retrieval_config.rerank_top_k)
         else:
@@ -136,8 +156,7 @@ class RAGAgent(Agent):
             }
         context = _format_context(retrieved)
         prompt = SYNTHESIS_USER_TEMPLATE.format(context=context, query=state["query"])
-        client = get_chat_client()
-        resp = client.chat.completions.create(
+        resp = _chat_with_retry(
             model=get_model_name(),
             messages=[
                 {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},

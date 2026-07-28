@@ -1,4 +1,4 @@
-"""LLM provider factory: swap Gemini / Azure / Ollama via one env var."""
+﻿"""LLM provider factory: swap Gemini / Azure / Ollama via one env var."""
 from __future__ import annotations
 from openai import AzureOpenAI, OpenAI
 from src.config import settings
@@ -6,8 +6,8 @@ from src.config import settings
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
-_MODEL_BY_PROVIDER = {"gemini": "gemini-2.5-flash", "azure": "gpt-4o-mini", "ollama": "qwen2.5:7b"}
-_JUDGE_MODEL_BY_PROVIDER = {"gemini": "gemini-2.5-flash-lite", "azure": "gpt-4o-mini", "ollama": "qwen2.5:7b"}
+_MODEL_BY_PROVIDER = {"gemini": "gemini-flash-latest", "azure": "gpt-4o-mini", "ollama": "qwen2.5:7b"}
+_JUDGE_MODEL_BY_PROVIDER = {"gemini": "gemini-flash-latest", "azure": "gpt-4o-mini", "ollama": "qwen2.5:7b"}
 
 
 def get_chat_client() -> OpenAI:
