@@ -1,4 +1,4 @@
-"""Retrieval evaluation CLI ā€” measures IR quality across 3 configs.
+"""Retrieval evaluation CLI Äā‚¬ā€¯ measures IR quality across 3 configs.
 
 Usage:
     python -m scripts.eval_retrieval
@@ -7,6 +7,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from time import perf_counter
 
@@ -22,6 +23,9 @@ CONFIGS: dict[str, RetrievalConfig] = {
     "hybrid (dense+BM25) ": RetrievalConfig(use_bm25=True,  use_rerank=False, rerank_top_k=5),
     "hybrid + rerank     ": RetrievalConfig(use_bm25=True,  use_rerank=True,  rerank_top_k=5),
 }
+
+if os.environ.get("EVAL_SKIP_RERANK") == "1":
+    CONFIGS = {k: v for k, v in CONFIGS.items() if not v.use_rerank}
 
 
 def retrieve_and_score(item: GoldenItem, config: RetrievalConfig) -> QuestionResult:
