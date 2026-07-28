@@ -78,7 +78,7 @@ def _judge_call(question: str, context: str, answer: str, hint: str) -> str:
             )},
         ],
         temperature=0.0,
-        max_tokens=200,
+        max_tokens=400,
     )
     return (resp.choices[0].message.content or "").strip()
 
@@ -93,6 +93,14 @@ def _parse_judge_json(raw: str) -> AnswerScores:
             reasoning=str(d.get("reasoning", ""))[:300],
         )
     except Exception:
+        f = re.search(r'"faithfulness"\s*:\s*([0-9.]+)', raw)
+        c = re.search(r'"correctness"\s*:\s*([0-9.]+)', raw)
+        if f and c:
+            return AnswerScores(
+                faithfulness=max(0.0, min(1.0, float(f.group(1)))),
+                correctness=max(0.0, min(1.0, float(c.group(1)))),
+                reasoning="(recovered from truncated JSON)",
+            )
         return AnswerScores(0.0, 0.0, f"judge output unparseable: {raw[:120]}")
 
 
