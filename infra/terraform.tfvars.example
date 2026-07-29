@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+prefix                   = "agenticrag"
+location                 = "eastus"
+provider_name            = "azure"
+
+azure_openai_key         = "<your-azure-openai-key>"
+azure_openai_endpoint    = "https://<your-resource>.openai.azure.com/"
+azure_deployment_name    = "gpt-5-mini"
+azure_openai_api_version = "2024-12-01-preview"
+
+gemini_api_key           = "<your-gemini-key>"
+qdrant_url               = "http://localhost:6333"
+
+image_tag                = "latest"
