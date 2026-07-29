@@ -1,13 +1,14 @@
 """Supervisor orchestrator — routes a query to the right agent.
 
-Graph: START -> route -> (rag_agent | sql_agent) -> END
+Graph: START -> route -> (rag | sql | api) -> END
 
-The router is an LLM classifier that reads the question and picks an agent:
-  - "rag": conceptual / how-to / explanatory questions answered from docs.
-  - "sql": quantitative / aggregate / lookup questions over the KEV catalog.
+Router picks:
+  - "rag": conceptual / how-to / definitional questions from OWASP+NIST docs.
+  - "sql": quantitative / aggregate / list questions over the KEV catalog.
+  - "api": questions needing a LIVE external REST API call (fetching current
+    data from a public API not in our corpus or database).
 
-Both agents implement the same Agent interface, so adding a third (API agent,
-Phase 3) means registering it here and adding one line to the router prompt.
+All agents share the Agent interface — adding one = register + one prompt line.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.agents.api_agent import APIAgent
 from src.agents.base import Agent, AgentResponse
 from src.agents.rag_agent import RAGAgent
 from src.agents.sql_agent import SQLAgent
@@ -32,17 +34,21 @@ from src.observability.spans import set_llm_usage, span
 
 _RETRY_EXCEPTIONS = (RateLimitError, InternalServerError, APIError)
 
-AgentName = Literal["rag", "sql"]
+AgentName = Literal["rag", "sql", "api"]
 
 ROUTER_PROMPT = """You are a router that decides which specialist agent should answer a cybersecurity question.
 
 Agents:
-- "rag": answers conceptual, how-to, definitional, or explanatory questions using a knowledge base of OWASP and NIST security documentation. Examples: "How do I prevent SQL injection?", "What is broken access control?", "What does NIST recommend for password storage?", "What is the CVSS severity of CVE-2021-44228?" (specific CVE facts).
-- "sql": answers quantitative questions that require counting, aggregating, filtering, or listing entries from a structured database of the CISA Known Exploited Vulnerabilities (KEV) catalog. Examples: "How many Microsoft vulnerabilities are in the catalog?", "Which vendor has the most known exploited vulnerabilities?", "List Apache CVEs added in 2024.", "How many are used in ransomware?"
+- "rag": conceptual, how-to, definitional, or explanatory questions using a knowledge base of OWASP and NIST security documentation. Examples: "How do I prevent SQL injection?", "What is broken access control?", "What is the CVSS severity of CVE-2021-44228?"
+- "sql": quantitative questions that require counting, aggregating, filtering, or listing entries from a structured database of the CISA Known Exploited Vulnerabilities (KEV) catalog. Examples: "How many Microsoft vulnerabilities are in the catalog?", "Which vendor has the most exploited vulnerabilities?"
+- "api": questions that need a LIVE call to an external public REST API to fetch current data NOT in our docs or database — e.g. live GitHub repository info, real-time data from a public web API. Examples: "How many open issues does the langchain GitHub repo have?", "Fetch the latest release of a public project."
 
-Rule of thumb: if the question asks for a NUMBER, COUNT, RANKING, or a LIST filtered from the catalog, choose "sql". If it asks HOW, WHY, WHAT IS, or for guidance/explanation, choose "rag".
+Rules of thumb:
+- NUMBER/COUNT/RANKING/LIST from the KEV catalog -> "sql"
+- HOW/WHY/WHAT IS / guidance / a specific CVE's details -> "rag"
+- Needs fresh data from an external live web API -> "api"
 
-Respond with exactly one word: rag OR sql
+Respond with exactly one word: rag OR sql OR api
 
 Question: {query}
 Agent:"""
@@ -68,7 +74,7 @@ def _chat(**kwargs: Any) -> Any:
 
 
 class Supervisor(Agent):
-    """Routes queries to the RAG or SQL agent."""
+    """Routes queries to the RAG, SQL, or API agent."""
 
     name = "supervisor"
 
@@ -76,15 +82,17 @@ class Supervisor(Agent):
         self,
         rag_agent: RAGAgent | None = None,
         sql_agent: SQLAgent | None = None,
+        api_agent: APIAgent | None = None,
     ) -> None:
         self.agents: dict[str, Agent] = {
             "rag": rag_agent or RAGAgent(),
             "sql": sql_agent or SQLAgent(),
+            "api": api_agent or APIAgent(),
         }
         self.graph = self._build_graph()
 
     def classify(self, query: str) -> AgentName:
-        """LLM router: return 'rag' or 'sql' for a query."""
+        """LLM router: return 'rag', 'sql', or 'api'."""
         with span("supervisor.route") as sp:
             try:
                 resp = _chat(
@@ -96,7 +104,12 @@ class Supervisor(Agent):
                 raw = (resp.choices[0].message.content or "").strip().lower()
             except _RETRY_EXCEPTIONS:
                 raw = "rag"
-            route: AgentName = "sql" if "sql" in raw else "rag"
+            if "sql" in raw:
+                route: AgentName = "sql"
+            elif "api" in raw:
+                route = "api"
+            else:
+                route = "rag"
             sp.set_attribute("supervisor.route", route)
             return route
 
@@ -105,10 +118,15 @@ class Supervisor(Agent):
         g.add_node("route", self._route_node)
         g.add_node("rag", self._rag_node)
         g.add_node("sql", self._sql_node)
+        g.add_node("api", self._api_node)
         g.add_edge(START, "route")
-        g.add_conditional_edges("route", lambda s: s["route"], {"rag": "rag", "sql": "sql"})
+        g.add_conditional_edges(
+            "route", lambda s: s["route"],
+            {"rag": "rag", "sql": "sql", "api": "api"},
+        )
         g.add_edge("rag", END)
         g.add_edge("sql", END)
+        g.add_edge("api", END)
         return g.compile()
 
     def _route_node(self, state: SupervisorState) -> dict[str, Any]:
@@ -119,6 +137,9 @@ class Supervisor(Agent):
 
     def _sql_node(self, state: SupervisorState) -> dict[str, Any]:
         return {"response": self.agents["sql"].run(state["query"])}
+
+    def _api_node(self, state: SupervisorState) -> dict[str, Any]:
+        return {"response": self.agents["api"].run(state["query"])}
 
     def run(self, query: str) -> AgentResponse:
         with span("supervisor.run", **{"query": query[:200]}):
