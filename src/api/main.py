@@ -1,7 +1,8 @@
 """FastAPI app: /chat (JSON) and /chat/stream (SSE) endpoints.
 
-M5: initializes tracing at startup, auto-instruments FastAPI so every HTTP
-request is a top-level span in Jaeger.
+Routes through the Supervisor, which classifies each query and dispatches to
+the RAG agent (conceptual/how-to) or SQL agent (quantitative/aggregate).
+The response metadata includes `routed_to` so clients see which agent answered.
 
 Run:
     uvicorn src.api.main:app --reload
@@ -20,24 +21,24 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from src.agents.base import Citation
-from src.agents.rag_agent import RAGAgent
+from src.orchestrator.supervisor import Supervisor
 from src.observability.tracing import init_tracing
 
 
-_agent: RAGAgent | None = None
+_supervisor: Supervisor | None = None
 
 
-def get_agent() -> RAGAgent:
-    global _agent
-    if _agent is None:
-        _agent = RAGAgent()
-    return _agent
+def get_supervisor() -> Supervisor:
+    global _supervisor
+    if _supervisor is None:
+        _supervisor = Supervisor()
+    return _supervisor
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_tracing()
-    _ = get_agent()
+    _ = get_supervisor()
     yield
 
 
@@ -60,7 +61,7 @@ async def root() -> dict[str, str]:
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> dict[str, Any]:
-    resp = get_agent().run(req.query)
+    resp = get_supervisor().run(req.query)
     return {
         "answer": resp.answer,
         "citations": [_citation_dict(c) for c in resp.citations],
@@ -70,10 +71,10 @@ async def chat(req: ChatRequest) -> dict[str, Any]:
 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest) -> EventSourceResponse:
-    agent = get_agent()
+    supervisor = get_supervisor()
 
     async def event_stream() -> AsyncIterator[dict[str, str]]:
-        for event in agent.stream(req.query):
+        for event in supervisor.stream(req.query):
             for node_name, node_state in event.items():
                 payload = {"node": node_name, "state": _safe_state(node_state)}
                 yield {"event": node_name, "data": json.dumps(payload)}
@@ -85,13 +86,10 @@ async def chat_stream(req: ChatRequest) -> EventSourceResponse:
 def _safe_state(state: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in state.items():
-        if k == "retrieved" and isinstance(v, list):
-            out[k] = [
-                {"source": p.get("source_id"), "section": p.get("section"), "score": s}
-                for _pid, s, p in v[:5]
-            ]
-        elif k == "citations" and isinstance(v, list):
-            out[k] = [_citation_dict(c) for c in v]
+        if k == "response":
+            # AgentResponse object — surface answer + routing only.
+            out["answer"] = getattr(v, "answer", "")
+            out["routed_to"] = getattr(v, "metadata", {}).get("routed_to", "")
         elif isinstance(v, (str, int, float, bool, type(None))):
             out[k] = v
     return out
