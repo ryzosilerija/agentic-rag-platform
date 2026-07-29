@@ -1,0 +1,15 @@
+{
+  "n": 16,
+  "accuracy": 1.0,
+  "confusion": {
+    "rag": {
+      "rag": 8,
+      "sql": 0
+    },
+    "sql": {
+      "sql": 8,
+      "rag": 0
+    }
+  },
+  "misroutes": []
+}

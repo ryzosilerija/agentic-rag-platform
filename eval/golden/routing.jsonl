@@ -1,0 +1,16 @@
+{"id":"r01","query":"How do I prevent SQL injection in a web application?","expected_route":"rag"}
+{"id":"r02","query":"What is broken access control?","expected_route":"rag"}
+{"id":"r03","query":"What does NIST recommend for password storage?","expected_route":"rag"}
+{"id":"r04","query":"How does Content Security Policy mitigate XSS?","expected_route":"rag"}
+{"id":"r05","query":"What is the CVSS severity of CVE-2021-44228?","expected_route":"rag"}
+{"id":"r06","query":"Explain the NIST Cybersecurity Framework Govern function.","expected_route":"rag"}
+{"id":"r07","query":"What are prepared statements?","expected_route":"rag"}
+{"id":"r08","query":"How should I store session tokens securely?","expected_route":"rag"}
+{"id":"r09","query":"How many vulnerabilities in the catalog are from Microsoft?","expected_route":"sql"}
+{"id":"r10","query":"Which vendor has the most known exploited vulnerabilities?","expected_route":"sql"}
+{"id":"r11","query":"How many vulnerabilities are used in ransomware campaigns?","expected_route":"sql"}
+{"id":"r12","query":"List 5 Apache vulnerabilities in the KEV catalog.","expected_route":"sql"}
+{"id":"r13","query":"Count the vulnerabilities added in 2024.","expected_route":"sql"}
+{"id":"r14","query":"What are the top 3 vendors by number of exploited vulnerabilities?","expected_route":"sql"}
+{"id":"r15","query":"How many Cisco products appear in the catalog?","expected_route":"sql"}
+{"id":"r16","query":"Show me all vulnerabilities with a due date before 2023.","expected_route":"sql"}
