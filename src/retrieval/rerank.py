@@ -16,6 +16,34 @@ from typing import Any
 # multilingual and slightly higher NDCG on long-doc retrieval.
 DEFAULT_RERANKER = "BAAI/bge-reranker-base"
 
+# --- M16: LoRA adapter toggle ---------------------------------------------
+# Lets eval swap between the stock reranker and a LoRA-fine-tuned variant.
+# The adapter attaches to the CrossEncoder's underlying HF model (.model).
+_LORA_PATH: str | None = None
+
+
+def set_lora_adapter(path: str | None) -> None:
+    """Toggle the LoRA adapter used by the reranker.
+
+    path=None  -> use the stock base reranker.
+    path=<dir> -> load the LoRA adapter from that directory onto the base model.
+    Clears the cached model so the next rerank() rebuilds with the new setting.
+    """
+    global _LORA_PATH
+    _LORA_PATH = path
+    _get_reranker.cache_clear()
+
+
+def _apply_lora_if_set(cross_encoder: Any) -> Any:
+    """If a LoRA path is set, wrap the CrossEncoder's inner model with it."""
+    if not _LORA_PATH:
+        return cross_encoder
+    from peft import PeftModel
+    print(f"  loading LoRA adapter from {_LORA_PATH}...")
+    cross_encoder.model = PeftModel.from_pretrained(cross_encoder.model, _LORA_PATH)
+    cross_encoder.model.eval()
+    return cross_encoder
+
 
 @lru_cache(maxsize=1)
 def _get_reranker() -> Any:
@@ -23,7 +51,8 @@ def _get_reranker() -> Any:
     from sentence_transformers import CrossEncoder
 
     print(f"  loading reranker {DEFAULT_RERANKER} (first call downloads ~1.1GB)...")
-    return CrossEncoder(DEFAULT_RERANKER)
+    ce = CrossEncoder(DEFAULT_RERANKER)
+    return _apply_lora_if_set(ce)
 
 
 def rerank(
