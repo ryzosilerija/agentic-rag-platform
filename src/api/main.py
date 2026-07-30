@@ -23,6 +23,7 @@ from sse_starlette.sse import EventSourceResponse
 from src.agents.base import Citation
 from src.orchestrator.supervisor import Supervisor
 from src.observability.tracing import init_tracing
+from src.observability.cost import COST, track_request_latency
 
 
 _supervisor: Supervisor | None = None
@@ -59,9 +60,15 @@ async def root() -> dict[str, str]:
     return {"status": "ok", "name": "agentic-rag-platform"}
 
 
+@app.get("/metrics")
+async def metrics() -> dict:
+    """Cost / latency / cache metrics accumulated since process start."""
+    return COST.snapshot()
+
 @app.post("/chat")
 async def chat(req: ChatRequest) -> dict[str, Any]:
-    resp = get_supervisor().run(req.query)
+    with track_request_latency():
+        resp = get_supervisor().run(req.query)
     return {
         "answer": resp.answer,
         "citations": [_citation_dict(c) for c in resp.citations],

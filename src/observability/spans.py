@@ -51,5 +51,13 @@ def set_llm_usage(sp: trace.Span, usage: Any) -> None:
         sp.set_attribute("llm.prompt_tokens", int(usage.prompt_tokens or 0))
         sp.set_attribute("llm.completion_tokens", int(usage.completion_tokens or 0))
         sp.set_attribute("llm.total_tokens", int(usage.total_tokens or 0))
+        from src.observability.cost import COST
+        model = ""
+        try:
+            model = sp.attributes.get("llm.model", "") if hasattr(sp, "attributes") else ""
+        except Exception:
+            model = ""
+        cost = COST.record_llm(model, int(usage.prompt_tokens or 0), int(usage.completion_tokens or 0))
+        sp.set_attribute("llm.cost_usd", cost)
     except Exception:
         pass

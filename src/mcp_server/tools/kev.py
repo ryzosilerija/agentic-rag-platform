@@ -23,9 +23,12 @@ def _fetch_kev() -> list[dict[str, str]]:
     _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
 
+    from src.observability.cost import COST
     if _CACHE_PATH.exists() and (now - _CACHE_PATH.stat().st_mtime) < _CACHE_TTL_SEC:
+        COST.record_cache(hit=True)
         text = _CACHE_PATH.read_text(encoding="utf-8")
     else:
+        COST.record_cache(hit=False)
         with httpx.Client(timeout=30.0) as client:
             resp = client.get(_KEV_URL, headers={"User-Agent": "agentic-rag-platform/0.1"})
             resp.raise_for_status()
