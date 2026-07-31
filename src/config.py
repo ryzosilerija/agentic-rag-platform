@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-10-21"
     azure_deployment_name: str = ""
     qdrant_url: str = "http://localhost:6333"
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "password123"
     qdrant_collection: str = "documents"
     langsmith_api_key: str = ""
     langsmith_tracing: bool = False
