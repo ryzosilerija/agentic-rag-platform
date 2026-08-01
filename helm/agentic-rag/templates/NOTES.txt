@@ -1,0 +1,8 @@
+Agentic RAG Platform deployed.
+
+Backend:     kubectl port-forward svc/backend 8000:{{ .Values.backend.port }}
+Grafana:     kubectl port-forward svc/grafana 3000:{{ .Values.monitoring.grafana.port }}
+Prometheus:  kubectl port-forward svc/prometheus 9090:{{ .Values.monitoring.prometheus.port }}
+
+Check autoscaling:  kubectl get hpa
+Check pods:         kubectl get pods

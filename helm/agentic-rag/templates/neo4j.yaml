@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j
+spec:
+  serviceName: neo4j
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neo4j
+  template:
+    metadata:
+      labels:
+        app: neo4j
+    spec:
+      containers:
+        - name: neo4j
+          image: {{ .Values.neo4j.image }}
+          ports:
+            - containerPort: {{ .Values.neo4j.boltPort }}
+              name: bolt
+            - containerPort: {{ .Values.neo4j.httpPort }}
+              name: http
+          env:
+            - name: NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: NEO4J_PASSWORD
+                  optional: true
+          volumeMounts:
+            - name: neo4j-data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.neo4j.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: neo4j-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.neo4j.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+spec:
+  selector:
+    app: neo4j
+  ports:
+    - port: {{ .Values.neo4j.boltPort }}
+      targetPort: {{ .Values.neo4j.boltPort }}
+      name: bolt
+    - port: {{ .Values.neo4j.httpPort }}
+      targetPort: {{ .Values.neo4j.httpPort }}
+      name: http
+  clusterIP: None
