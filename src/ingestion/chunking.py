@@ -51,7 +51,10 @@ def chunk_document(doc: Document) -> list[Chunk]:
 
 def _chunk_markdown(doc: Document) -> list[Chunk]:
     header_splitter = MarkdownHeaderTextSplitter(
-        headers_to_split_on=[("#", "h1"), ("##", "h2"), ("###", "h3")],
+        headers_to_split_on=[
+            ("#", "h1"), ("##", "h2"), ("###", "h3"),
+            ("####", "h4"), ("#####", "h5"),
+        ],
         strip_headers=False,
     )
     char_splitter = RecursiveCharacterTextSplitter(

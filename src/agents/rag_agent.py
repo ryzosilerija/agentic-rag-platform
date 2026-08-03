@@ -147,7 +147,7 @@ class RAGAgent(Agent):
                     messages=[
                         {"role": "user", "content": QUERY_REWRITE_PROMPT.format(query=state["query"])},
                     ],
-                    max_tokens=100,
+                    max_tokens=512,
                     temperature=0.0,
                 )
                 rewritten = (resp.choices[0].message.content or state["query"]).strip()
