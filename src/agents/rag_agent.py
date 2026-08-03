@@ -78,8 +78,10 @@ def _format_context(
     for _pid, _score, payload in retrieved:
         src = payload.get("source_id", "?")
         section = payload.get("section") or "-"
+        page = payload.get("page")
+        loc = f"{src}, p.{page}" if page is not None else src
         text = (payload.get("text") or "").strip()
-        lines.append(f"[{idx}] Source: {src} | Section: {section}\n{text}\n")
+        lines.append(f"[{idx}] Source: {loc} | Section: {section}\n{text}\n")
         idx += 1
     for tr in tool_results:
         name = tr.get("name", "?")
@@ -103,6 +105,7 @@ def _extract_citations(
             chunk_id=p.get("chunk_id", ""),
             section=p.get("section") or "",
             text=(p.get("text") or "")[:400],
+            page=p.get("page"),
         ))
     for tr in tool_results:
         cites.append(Citation(

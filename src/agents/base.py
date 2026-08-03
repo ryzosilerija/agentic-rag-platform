@@ -18,6 +18,7 @@ class Citation:
     chunk_id: str
     section: str
     text: str
+    page: int | None = None
 
 
 @dataclass

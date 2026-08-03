@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +29,18 @@ class Chunk:
 _CHARS_PER_CHUNK = 1600
 _OVERLAP = 200
 
+_PAGE_SENTINEL = re.compile(r"<!--page:(\d+)-->")
+
+
+def _extract_page_and_strip(text: str, last_page: int | None) -> tuple[str, int | None]:
+    """Find the last page sentinel in this text (carrying forward last_page if
+    none is present), then strip all sentinels out of the returned text."""
+    page = last_page
+    for m in _PAGE_SENTINEL.finditer(text):
+        page = int(m.group(1))
+    clean = _PAGE_SENTINEL.sub("", text).strip()
+    return clean, page
+
 
 def chunk_document(doc: Document) -> list[Chunk]:
     """Chunk a single document, using markdown-aware splitting for md/pdf."""
@@ -50,15 +63,18 @@ def _chunk_markdown(doc: Document) -> list[Chunk]:
         sections = header_splitter.split_text(doc.content)
     except Exception:
         return _chunk_flat(doc)
-
     chunks: list[Chunk] = []
     idx = 0
+    last_page: int | None = None
     for section in sections:
         heading = " > ".join(v for v in section.metadata.values() if v)
         for piece in char_splitter.split_text(section.page_content):
-            text = piece.strip()
+            text, last_page = _extract_page_and_strip(piece, last_page)
             if not text:
                 continue
+            meta = doc.metadata.copy()
+            if last_page is not None:
+                meta["page"] = last_page
             chunks.append(
                 Chunk(
                     text=text,
@@ -68,7 +84,7 @@ def _chunk_markdown(doc: Document) -> list[Chunk]:
                     source_type=doc.source_type,
                     chunk_index=idx,
                     section=heading,
-                    metadata=doc.metadata.copy(),
+                    metadata=meta,
                 )
             )
             idx += 1
@@ -80,16 +96,24 @@ def _chunk_flat(doc: Document) -> list[Chunk]:
         chunk_size=_CHARS_PER_CHUNK,
         chunk_overlap=_OVERLAP,
     )
-    return [
-        Chunk(
-            text=p.strip(),
-            chunk_id=f"{doc.source_id}#{i}",
-            source_id=doc.source_id,
-            source_path=doc.source_path,
-            source_type=doc.source_type,
-            chunk_index=i,
-            metadata=doc.metadata.copy(),
+    chunks: list[Chunk] = []
+    last_page: int | None = None
+    for i, p in enumerate(splitter.split_text(doc.content)):
+        text, last_page = _extract_page_and_strip(p, last_page)
+        if not text:
+            continue
+        meta = doc.metadata.copy()
+        if last_page is not None:
+            meta["page"] = last_page
+        chunks.append(
+            Chunk(
+                text=text,
+                chunk_id=f"{doc.source_id}#{i}",
+                source_id=doc.source_id,
+                source_path=doc.source_path,
+                source_type=doc.source_type,
+                chunk_index=i,
+                metadata=meta,
+            )
         )
-        for i, p in enumerate(splitter.split_text(doc.content))
-        if p.strip()
-    ]
+    return chunks

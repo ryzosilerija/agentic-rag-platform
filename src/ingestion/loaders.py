@@ -19,10 +19,21 @@ class Document:
 
 
 def load_pdf(path: Path) -> Document:
-    """Extract PDF to markdown using pymupdf4llm (preserves headings and tables)."""
+    """Extract PDF to markdown using pymupdf4llm, preserving per-page boundaries.
+
+    Emits invisible <!--page:N--> sentinels at each page boundary so the
+    chunker can recover the source page for citations. Sentinels are HTML
+    comments (invisible in rendered markdown) and are stripped from chunk
+    text before embedding.
+    """
     import pymupdf4llm
 
-    md_text = pymupdf4llm.to_markdown(str(path))
+    pages = pymupdf4llm.to_markdown(str(path), page_chunks=True)
+    parts = []
+    for p in pages:
+        pageno = p["metadata"]["page_number"]
+        parts.append(f"<!--page:{pageno}-->\n{p['text']}")
+    md_text = "\n\n".join(parts)
     return Document(
         content=md_text,
         source_id=path.stem,

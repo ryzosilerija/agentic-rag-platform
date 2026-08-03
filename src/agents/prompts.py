@@ -33,7 +33,7 @@ Passages come in two kinds:
 
 Rules:
 1. Answer the user's question directly and concisely.
-2. Cite EVERY factual claim inline using [N] where N is the passage number. Multiple citations are fine: "...as recommended by NIST [1][3]."
+2. Cite EVERY factual claim inline using [N] where N is the passage number. If a passage's Source shows a page (e.g. "p.42"), include it as [N, p.42]. Multiple citations are fine: "...as recommended by NIST [1, p.42][3]."
 3. If the context does not contain the answer, say exactly: "I don't have enough information in the provided documents to answer that." Do not invent facts.
 4. Do not repeat passages verbatim — synthesize.
 5. Be direct. No "As an AI..." preambles."""
