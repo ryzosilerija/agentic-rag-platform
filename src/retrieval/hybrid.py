@@ -23,6 +23,7 @@ class RetrievalConfig:
     rerank_top_k: int = 5
     use_bm25: bool = True
     use_rerank: bool = True
+    use_parent_retrieval: bool = True
 
 
 def retrieve(
